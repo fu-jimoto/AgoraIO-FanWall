@@ -1,0 +1,231 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<title>FanWall-Audience</title>
+<script src="AgoraRTCSDK-3.2.1.js"></script>
+<script src="agora-rtm-sdk-1.4.0.js"></script>
+<script src="vendor/jquery.js"></script>
+</head>
+
+<body>
+<div id="div_device" class="">
+<div class="select">
+<label for="audioSource">Audio source: </label><select id="audioSource"></select>
+</div>
+<div class="select">
+<label for="videoSource">Video source: </label><select id="videoSource"></select>
+</div>
+</div>
+
+<div id="div_join" class="">
+<div class="">
+App ID: <input id="appId" type="text" value="" size="36"></input>
+Channel: <input id="channel" type="text" value="main" size="4"></input>
+県: <input id="pref" type="text" value="" size="10"></input>
+ニックネーム: <input id="nickname" type="text" value="" size="10"></input>
+
+
+<button id="join" class="" onclick="join()">Join</button>
+<button id="leave" class="" onclick="leave()">Leave</button>
+</div>
+</div>
+
+<div id="video" style="margin:0 auto;">
+    <div id="agora_local" style="float:right;width:210px;height:147px;display:inline-block;"></div>
+</div>
+
+<script language="javascript">
+
+if(!AgoraRTC.checkSystemRequirements()) {
+  alert("Your browser does not support WebRTC!");
+}
+
+//video
+var client, localStream, camera, microphone, client2, localStream2;
+var audioSelect = document.querySelector('select#audioSource');
+var videoSelect = document.querySelector('select#videoSource');
+
+//rtm
+var rtm, rtmChannel;
+
+
+function join() {
+
+    //ライブ配信視聴用
+    client = AgoraRTC.createClient({mode: 'live', codec:'vp8'});
+    client.init(appId.value, function () {
+        client.join("", channel.value, null, function(uid) {
+            console.log("User " + uid + " join channel successfully");
+            microphone = audioSource.value;
+            localStream = AgoraRTC.createStream({streamID: uid, audio: true, microphoneId: microphone, video: false, screen: false});
+	        localStream.init(function() {
+                console.log("getUserMedia successfully");
+            }, function (err) {
+                console.log("getUserMedia failed", err);
+            });
+        }, function(err) {
+            console.log("Join channel failed", err);
+        });
+    }, function (err) {
+        console.log("AgoraRTC client init failed", err);
+    });
+
+    client.on('error', function(err) {
+        console.log("Got error msg:", err.reason);
+    });
+
+    client.on('stream-added', function (evt) {
+        var stream = evt.stream;
+        console.log("New stream added: " + stream.getId());
+        console.log("Subscribe ", stream);
+        client.subscribe(stream, function (err) {
+            console.log("Subscribe stream failed", err);
+        });
+    });
+
+    client.on('stream-subscribed', function (evt) {
+        var stream = evt.stream;
+        console.log("Subscribe remote stream successfully: " + stream.getId());
+        if ($('div#video #agora_remote'+stream.getId()).length === 0) {
+            $('div#video').append('<div id="agora_remote'+stream.getId()+'" style="float:left; width:810px;height:607px;display:inline-block;"></div>');
+        }
+        stream.play('agora_remote' + stream.getId());
+    });
+
+    client.on('stream-removed', function (evt) {
+        var stream = evt.stream;
+        stream.stop();
+        $('#agora_remote' + stream.getId()).remove();
+        console.log("Remote stream is removed " + stream.getId());
+    });
+
+    client.on('peer-leave', function (evt) {
+        var stream = evt.stream;
+        if (stream) {
+            stream.stop();
+            $('#agora_remote' + stream.getId()).remove();
+            console.log(evt.uid + " leaved from this channel");
+        }
+    });
+
+
+    //会場モニター用
+    client2 = AgoraRTC.createClient({mode: 'live', codec:'vp8'});
+    client2.init(appId.value, function () {
+        var channel = getChannelName()
+        client2.join("", channel, null, function(uid) {//サーバから入室するチャネル名を取得する
+            console.log("User " + uid + " join channel successfully");
+
+            camera = videoSource.value;
+	        localStream2 = AgoraRTC.createStream({streamID: uid, audio: false, cameraId: camera, video: true, screen: false});
+	        localStream2.init(function() {
+                console.log("getUserMedia successfully");
+                localStream2.play('agora_local');
+                client2.publish(localStream2, function (err) {
+                    console.log("Publish local stream error: " + err);
+                });
+                client2.on('stream-published', function (evt) {
+                    console.log("Publish local stream successfully");
+                });
+            }, function (err) {
+                console.log("getUserMedia failed", err);
+            });
+
+            //rtm
+            rtm = AgoraRTM.createInstance(appId.value);
+            rtm.login({ token: '', uid: channel+uid }).then(() => {
+                console.log('AgoraRTM client login success');
+
+                rtm.on('MessageFromPeer', function (message, peerId) {
+                    //メインチャンネルに対する音声のpublish or unpublish
+                    console.dir(message.text);
+                    if(message.text == "publish"){
+                        client.publish(localStream, function (err) {
+                            console.log("Publish local stream error: " + err);
+                        });
+                    }else if(message.text == "unpublish"){
+                        client.unpublish(localStream, function (err) {
+                            console.log("Publish local stream error: " + err);
+                        });
+                    }
+                });
+
+                //rtm channel
+                rtmChannel = rtm.createChannel(channel);
+                rtmChannel.join().then(()=>{
+                    console.log("RTM Join Channel Success");
+
+                    rtmChannel.on('ChannelMessage', function (message, memberId) {
+                        console.log("Get channel message:"+memberId);
+                        console.dir(message);
+
+
+                        //名前を聞かれた処理
+
+                        //発言を求められた処理
+
+
+                    });
+                    //send information
+                    var info = JSON.stringify({pref: pref.value, nickname: nickname.value, uid: uid});
+                    rtmChannel.sendMessage({text: info});
+                });
+            }).catch(err => {
+                console.log('AgoraRTM client login failure', err);
+            });
+        }, function(err) {
+            console.log("Join channel failed", err);
+        });
+    }, function (err) {
+        console.log("AgoraRTC client init failed", err);
+    });
+
+    client2.on('error', function(err) {
+        console.log("Got error msg:", err.reason);
+    });
+
+}
+
+function leave() {
+    document.getElementById("leave").disabled = true;
+    client.leave(function () {
+        console.log("Leavel channel successfully");
+    }, function (err) {
+        console.log("Leave channel failed");
+    });
+}
+
+function getDevices() {
+    AgoraRTC.getDevices(function (devices) {
+        for (var i = 0; i !== devices.length; ++i) {
+            var device = devices[i];
+            var option = document.createElement('option');
+            option.value = device.deviceId;
+            if (device.kind === 'audioinput') {
+                option.text = device.label || 'microphone ' + (audioSelect.length + 1);
+                audioSelect.appendChild(option);
+            } else if (device.kind === 'videoinput') {
+                option.text = device.label || 'camera ' + (videoSelect.length + 1);
+                videoSelect.appendChild(option);
+            } else {
+                console.log('Some other kind of source/device: ', device);
+            }
+        }
+    });
+}
+
+
+function getChannelName(){
+    //本来はサーバー側で管理して、APIで取得する
+    //サーバ側では各チャネルの人数を保持して16人を超えないようにする
+    //var channels = ["B1","B2","B3"];
+    var channels = ["B1"];
+    return channels[Math.floor(Math.random() * channels.length)];
+}
+
+
+getDevices();
+</script>
+</body>
+</html>
