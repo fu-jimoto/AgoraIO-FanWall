@@ -22,7 +22,6 @@
 <div class="">
 App ID: <input id="appId" type="text" value="" size="36"></input>
 Channel: <input id="channel" type="text" value="main" size="4"></input>
-県: <input id="pref" type="text" value="" size="10"></input>
 ニックネーム: <input id="nickname" type="text" value="" size="10"></input>
 
 
@@ -155,21 +154,16 @@ function join() {
                 rtmChannel = rtm.createChannel(channel);
                 rtmChannel.join().then(()=>{
                     console.log("RTM Join Channel Success");
+                    sendUserInfo(uid);
 
                     rtmChannel.on('ChannelMessage', function (message, memberId) {
                         console.log("Get channel message:"+memberId);
                         console.dir(message);
-
-
-                        //名前を聞かれた処理
-
-                        //発言を求められた処理
-
-
+                        if(message.text == "requestInfo"){
+                            sendUserInfo(uid);
+                        }
                     });
-                    //send information
-                    var info = JSON.stringify({pref: pref.value, nickname: nickname.value, uid: uid});
-                    rtmChannel.sendMessage({text: info});
+
                 });
             }).catch(err => {
                 console.log('AgoraRTM client login failure', err);
@@ -222,6 +216,12 @@ function getChannelName(){
     //var channels = ["B1","B2","B3"];
     var channels = ["B1"];
     return channels[Math.floor(Math.random() * channels.length)];
+}
+
+function sendUserInfo(uid){
+    //send information
+    var info = JSON.stringify({nickname: nickname.value, uid: uid});
+    rtmChannel.sendMessage({text: info});
 }
 
 

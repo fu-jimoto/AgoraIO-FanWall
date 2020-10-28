@@ -37,6 +37,8 @@ var rtm, rtmChannel;
 //publish user
 var publisUid = "";
 
+//user info
+var userInfo = [];
 
 function join() {
 
@@ -45,7 +47,6 @@ function join() {
     client.init(appId.value, function () {
         client.join("", channel, null, function(uid) {
             console.log("User " + uid + " join channel successfully");
-
 
             //rtm
             rtm = AgoraRTM.createInstance(appId.value);
@@ -59,13 +60,17 @@ function join() {
                     rtmChannel.on('ChannelMessage', function (message, memberId) {
                         console.log("Get channel message:"+memberId);
                         console.dir(message);
-                        //名前が届いた処理
+                        var info = JSON.parse(message.text);
+                        userInfo[info.uid] = info.nickname;
                     });
+
+                    //名前の要求（先人入室しているユーザー用）
+                    rtmChannel.sendMessage({text: "requestInfo"});
+
                 });
             }).catch(err => {
                 console.log('AgoraRTM client login failure', err);
             });
-
 
         }, function(err) {
             console.log("Join channel failed", err);
@@ -92,6 +97,7 @@ function join() {
         console.log("Subscribe remote stream successfully: " + stream.getId());
         if ($('div#video #agora_remote'+stream.getId()).length === 0) {
             $('div#video').append('<div onclick="invite('+ stream.getId() +')" id="agora_remote'+stream.getId()+'" style="float:left; width:120px;height:120px;display:inline-block;"></div>');
+            $('div#video #agora_remote'+stream.getId()).append('<div id="user_info'+stream.getId()+'"></div>');
         }
         stream.play('agora_remote' + stream.getId());
     });
@@ -179,6 +185,21 @@ function invite(uid){
     }
 
 }
+
+
+var updateUserInfo = function(){
+    for(var uid in userInfo){
+        if ($('div#video #agora_remote'+uid).length > 0) {
+            //$('div#video #agora_remote'+uid).append('<div>'+userInfo[uid]+'</div>');
+            $('#user_info'+uid).html(userInfo[uid]);
+        }
+    }
+
+
+
+}
+setInterval(updateUserInfo, 5*1000);
+
 
 </script>
 </body>
