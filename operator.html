@@ -146,7 +146,7 @@ function invite(uid){
     
     if(publisUid == ""){
         //publish
-        alert(1);
+        console.log("no publisher");
         rtm.sendMessageToPeer({ text: 'publish' }, peerId,).then(sendResult => {
             if (sendResult.hasPeerReceived) {
             } else {
@@ -157,6 +157,7 @@ function invite(uid){
 
     }else if(publisUid == peerId){
         //unpublish
+        console.log("kick publisher");
         rtm.sendMessageToPeer({ text: 'unpublish' }, peerId,).then(sendResult => {
             if (sendResult.hasPeerReceived) {
             } else {
@@ -165,8 +166,8 @@ function invite(uid){
         });
         publisUid = "";
     }else{
-
         //unpublish
+        console.log("change publisher");
         rtm.sendMessageToPeer({ text: 'unpublish' }, publisUid,).then(sendResult => {
             if (sendResult.hasPeerReceived) {
             } else {
