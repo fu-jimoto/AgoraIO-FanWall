@@ -1,11 +1,11 @@
-
 <!DOCTYPE html>
 <html>
 <head>
 <title>FanWall-Operator</title>
-<script src="AgoraRTCSDK-3.2.1.js"></script>
-<script src="agora-rtm-sdk-1.4.0.js"></script>
+<script src="AgoraRTC_N-4.7.1.js"></script>
+<script src="agora-rtm-sdk-1.4.3.js"></script>
 <script src="vendor/jquery.js"></script>
+<link rel="stylesheet" href="index.css">
 </head>
 
 <body>
@@ -13,9 +13,7 @@
 <div id="div_join" class="">
 <div class="">
 App ID: <input id="appId" type="text" value="" size="36"></input>
-Channel: <input id="channel" type="text" value="main" size="4"></input>
 <button id="join" class="" onclick="join()">Join</button>
-<button id="leave" class="" onclick="leave()">Leave</button>
 </div>
 </div>
 
@@ -28,178 +26,108 @@ if(!AgoraRTC.checkSystemRequirements()) {
   alert("Your browser does not support WebRTC!");
 }
 
-var client, localStream, camera, microphone;
-var channel = liveId = getParam('c');
+var client  = AgoraRTC.createClient({mode: 'live', codec:'vp8'});
+var userChannel = liveId = getParam('c');
+var remoteUsers = {};
 
 //rtm
 var rtm, rtmChannel;
 
-//publish user
-var publisUid = "";
-
 //user info
 var userInfo = [];
 
-function join() {
+async function join() {
+  client.on("user-published", handleUserPublished);
+  client.on("user-unpublished", handleUserUnpublished);
 
-    //ライブ配信視聴用
-    client = AgoraRTC.createClient({mode: 'live', codec:'vp8'});
-    client.init(appId.value, function () {
-        client.join("", channel, null, function(uid) {
-            console.log("User " + uid + " join channel successfully");
+  //ライブ配信視聴用
+  [ uid ] = await Promise.all([
+    client.join(appId.value, userChannel, null),
+  ]);
 
-            //rtm
-            rtm = AgoraRTM.createInstance(appId.value);
-            rtm.login({ token: '', uid: channel+uid }).then(() => {
-                console.log('AgoraRTM client login success');
+  //rtm
+  rtm = AgoraRTM.createInstance(appId.value);
+  rtm.login({ token: '', uid: userChannel+uid }).then(() => {
+    console.log('AgoraRTM client login success');
 
-                //rtm channel
-                rtmChannel = rtm.createChannel(channel);
-                rtmChannel.join().then(()=>{
-                    console.log("RTM Join Channel Success");
-                    rtmChannel.on('ChannelMessage', function (message, memberId) {
-                        console.log("Get channel message:"+memberId);
-                        console.dir(message);
-                        var info = JSON.parse(message.text);
-                        userInfo[info.uid] = info.nickname;
-                    });
-
-                    //名前の要求（先人入室しているユーザー用）
-                    rtmChannel.sendMessage({text: "requestInfo"});
-
-                });
-            }).catch(err => {
-                console.log('AgoraRTM client login failure', err);
-            });
-
-        }, function(err) {
-            console.log("Join channel failed", err);
-        });
-    }, function (err) {
-        console.log("AgoraRTC client init failed", err);
+    //rtm channel
+    rtmChannel = rtm.createChannel(userChannel);
+    rtmChannel.join().then(()=>{
+      console.log("RTM Join Channel Success");
+      rtmChannel.on('ChannelMessage', function (message, memberId) {
+        console.log("Get channel message:"+memberId);
+        console.dir(message);
+        var info = JSON.parse(message.text);
+        userInfo[info.uid] = info.nickname;
+      });
+      //名前の要求（先人入室しているユーザー用）
+      rtmChannel.sendMessage({text: "requestInfo"});
     });
-
-    client.on('error', function(err) {
-        console.log("Got error msg:", err.reason);
-    });
-
-    client.on('stream-added', function (evt) {
-        var stream = evt.stream;
-        console.log("New stream added: " + stream.getId());
-        console.log("Subscribe ", stream);
-        client.subscribe(stream, function (err) {
-            console.log("Subscribe stream failed", err);
-        });
-    });
-
-    client.on('stream-subscribed', function (evt) {
-        var stream = evt.stream;
-        console.log("Subscribe remote stream successfully: " + stream.getId());
-        if ($('div#video #agora_remote'+stream.getId()).length === 0) {
-            $('div#video').append('<div onclick="invite('+ stream.getId() +')" id="agora_remote'+stream.getId()+'" style="float:left; width:120px;height:120px;display:inline-block;"></div>');
-            $('div#video #agora_remote'+stream.getId()).append('<div id="user_info'+stream.getId()+'"></div>');
-        }
-        stream.play('agora_remote' + stream.getId());
-    });
-
-    client.on('stream-removed', function (evt) {
-        var stream = evt.stream;
-        stream.stop();
-        $('#agora_remote' + stream.getId()).remove();
-        console.log("Remote stream is removed " + stream.getId());
-    });
-
-    client.on('peer-leave', function (evt) {
-        var stream = evt.stream;
-        if (stream) {
-            stream.stop();
-            $('#agora_remote' + stream.getId()).remove();
-            console.log(evt.uid + " leaved from this channel");
-        }
-    });
+  }).catch(err => {
+    console.log('AgoraRTM client login failure', err);
+  });
 }
 
 
 
-function leave() {
-    document.getElementById("leave").disabled = true;
-    client.leave(function () {
-        console.log("Leavel channel successfully");
-    }, function (err) {
-        console.log("Leave channel failed");
-    });
+async function subscribe(user, mediaType) {
+  const uid = user.uid;
+  // subscribe to a remote user
+  await client.subscribe(user, mediaType);
+  console.log("subscribe success");
+  if (mediaType === 'video') {
+    const player = $(`
+      <div id="player-wrapper-${uid}">
+        <div id="userinfo-${uid}"></div>
+        <div id="player-${uid}" class="player"></div>
+      </div>
+    `);
+    $("#video").append(player);
+    user.videoTrack.play(`player-${uid}`);
+  }
+  if (mediaType === 'audio') {
+    user.audioTrack.play();
+  }
 }
 
+function handleUserPublished(user, mediaType) {
+  console.log("handleUserPublished");
+  const id = user.uid;
+  remoteUsers[id] = user;
+  subscribe(user, mediaType);
+}
+
+function handleUserUnpublished(user) {
+  const id = user.uid;
+  delete remoteUsers[id];
+  $(`#player-wrapper-${id}`).remove();
+}
 
 function getParam(name, url) {
-    if (!url) url = window.location.href;
-    name = name.replace(/[\[\]]/g, "\\$&");
-    var regex = new RegExp("[?&]" + name + "(=([^&#]*)|&|#|$)"),
-        results = regex.exec(url);
-    if (!results) return null;
-    if (!results[2]) return '';
-    return decodeURIComponent(results[2].replace(/\+/g, " "));
+  if (!url) url = window.location.href;
+  name = name.replace(/[\[\]]/g, "\\$&");
+  var regex = new RegExp("[?&]" + name + "(=([^&#]*)|&|#|$)"),
+    results = regex.exec(url);
+  if (!results) return null;
+  if (!results[2]) return '';
+  return decodeURIComponent(results[2].replace(/\+/g, " "));
 }
 
 function invite(uid){
-    var peerId = channel+uid;
-    
-    if(publisUid == ""){
-        //publish
-        console.log("no publisher");
-        rtm.sendMessageToPeer({ text: 'publish' }, peerId,).then(sendResult => {
-            if (sendResult.hasPeerReceived) {
-            } else {
-            }
-        }).catch(error => {
-        });
-        publisUid = peerId;
-
-    }else if(publisUid == peerId){
-        //unpublish
-        console.log("kick publisher");
-        rtm.sendMessageToPeer({ text: 'unpublish' }, peerId,).then(sendResult => {
-            if (sendResult.hasPeerReceived) {
-            } else {
-            }
-        }).catch(error => {
-        });
-        publisUid = "";
-    }else{
-        //unpublish
-        console.log("change publisher");
-        rtm.sendMessageToPeer({ text: 'unpublish' }, publisUid,).then(sendResult => {
-            if (sendResult.hasPeerReceived) {
-            } else {
-            }
-        }).catch(error => {
-        });
-
-        //publish
-        rtm.sendMessageToPeer({ text: 'publish' }, peerId,).then(sendResult => {
-            if (sendResult.hasPeerReceived) {
-            } else {
-            }
-        }).catch(error => {
-        });
-        publisUid = peerId;
-    }
-
+  var peerId = userChannel+uid;
+  rtm.sendMessageToPeer({ text: $("#invite_"+uid).val() }, peerId,).then(sendResult => {
+  }).catch(error => {
+  });
 }
-
 
 var updateUserInfo = function(){
-    for(var uid in userInfo){
-        if ($('div#video #agora_remote'+uid).length > 0) {
-            //$('div#video #agora_remote'+uid).append('<div>'+userInfo[uid]+'</div>');
-            $('#user_info'+uid).html(userInfo[uid]);
-        }
+  for(var uid in userInfo){
+    if ($('#userinfo-'+uid).length > 0) {
+      $('#userinfo-'+uid).html('ニックネーム:'+userInfo[uid]+' <input type="text" id="invite_'+uid+'" /><button onClick="invite('+uid+');">チャンネル移動</button>');
     }
-
-
-
+  }
 }
-setInterval(updateUserInfo, 5*1000);
+setInterval(updateUserInfo, 10*1000);
 
 
 </script>

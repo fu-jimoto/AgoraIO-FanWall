@@ -1,11 +1,11 @@
-
 <!DOCTYPE html>
 <html>
 <head>
 <title>FanWall-Audience</title>
-<script src="AgoraRTCSDK-3.2.1.js"></script>
-<script src="agora-rtm-sdk-1.4.0.js"></script>
+<script src="AgoraRTC_N-4.7.1.js"></script>
+<script src="agora-rtm-sdk-1.4.3.js"></script>
 <script src="vendor/jquery.js"></script>
+<link rel="stylesheet" href="index.css">
 </head>
 
 <body>
@@ -23,10 +23,7 @@
 App ID: <input id="appId" type="text" value="" size="36"></input>
 Channel: <input id="channel" type="text" value="main" size="4"></input>
 ニックネーム: <input id="nickname" type="text" value="" size="10"></input>
-
-
 <button id="join" class="" onclick="join()">Join</button>
-<button id="leave" class="" onclick="leave()">Leave</button>
 </div>
 </div>
 
@@ -41,174 +38,160 @@ if(!AgoraRTC.checkSystemRequirements()) {
 }
 
 //video
-var client, localStream, camera, microphone, client2, localStream2;
+var client  = AgoraRTC.createClient({mode: 'live', codec:'vp8'});
+var client2 = AgoraRTC.createClient({mode: 'live', codec:'vp8'});
 var audioSelect = document.querySelector('select#audioSource');
 var videoSelect = document.querySelector('select#videoSource');
-
+var remoteUsers = {};
+var localTracks = {
+  videoTrack: null,
+  audioTrack: null
+};
+var currentChannel;
 //rtm
 var rtm, rtmChannel;
 
 
-function join() {
+async function join() {
+  client.on("user-published", handleUserPublished);
+  client.on("user-unpublished", handleUserUnpublished);
 
-    //ライブ配信視聴用
-    client = AgoraRTC.createClient({mode: 'live', codec:'vp8'});
-    client.init(appId.value, function () {
-        client.join("", channel.value, null, function(uid) {
-            console.log("User " + uid + " join channel successfully");
-            microphone = audioSource.value;
-            localStream = AgoraRTC.createStream({streamID: uid, audio: true, microphoneId: microphone, video: false, screen: false});
-	        localStream.init(function() {
-                console.log("getUserMedia successfully");
-            }, function (err) {
-                console.log("getUserMedia failed", err);
-            });
-        }, function(err) {
-            console.log("Join channel failed", err);
-        });
-    }, function (err) {
-        console.log("AgoraRTC client init failed", err);
-    });
+  //ライブ配信視聴用
+  [ uid ] = await Promise.all([
+    client.join(appId.value, channel.value, null),
+  ]);
 
-    client.on('error', function(err) {
-        console.log("Got error msg:", err.reason);
-    });
+  //会場モニター用
+  var userChannel =  getChannelName();
+  currentChannel = userChannel;
+  [ uid2, localTracks.videoTrack ] = await Promise.all([
+    client2.join(appId.value,userChannel, null),
+    AgoraRTC.createCameraVideoTrack({cameraId:videoSource.value})
+  ]);
+  localTracks.videoTrack.play("agora_local");
+  await client2.setClientRole("host");
+  await client2.publish(localTracks.videoTrack);
+  console.log("publish success");
 
-    client.on('stream-added', function (evt) {
-        var stream = evt.stream;
-        console.log("New stream added: " + stream.getId());
-        console.log("Subscribe ", stream);
-        client.subscribe(stream, function (err) {
-            console.log("Subscribe stream failed", err);
-        });
-    });
+  //rtm
+  rtm = AgoraRTM.createInstance(appId.value);
+  rtm.login({ token: '', uid: userChannel+uid2 }).then(() => {
+      console.log('AgoraRTM client login success');
 
-    client.on('stream-subscribed', function (evt) {
-        var stream = evt.stream;
-        console.log("Subscribe remote stream successfully: " + stream.getId());
-        if ($('div#video #agora_remote'+stream.getId()).length === 0) {
-            $('div#video').append('<div id="agora_remote'+stream.getId()+'" style="float:left; width:810px;height:607px;display:inline-block;"></div>');
-        }
-        stream.play('agora_remote' + stream.getId());
-    });
+      rtm.on('MessageFromPeer', async function (message, peerId) {
+          console.dir(message.text);
+          //localTracを一旦破棄
+          for (trackName in localTracks) {
+            var track = localTracks[trackName];
+            if(track) {
+              track.stop();
+              track.close();
+              localTracks[trackName] = undefined;
+            }
+          }
+          //既存のチャンネルからは離脱
+          if(currentChannel != "main"){
+            await client2.leave();
+          }
 
-    client.on('stream-removed', function (evt) {
-        var stream = evt.stream;
-        stream.stop();
-        $('#agora_remote' + stream.getId()).remove();
-        console.log("Remote stream is removed " + stream.getId());
-    });
+          if(message.text == "main"){//メインチャンネルへ配信
+              [ localTracks.audioTrack, localTracks.videoTrack ] = await Promise.all([
+                AgoraRTC.createMicrophoneAudioTrack({microphoneId:audioSource.value}),
+                AgoraRTC.createCameraVideoTrack({cameraId:videoSource.value})
+              ]);
 
-    client.on('peer-leave', function (evt) {
-        var stream = evt.stream;
-        if (stream) {
-            stream.stop();
-            $('#agora_remote' + stream.getId()).remove();
-            console.log(evt.uid + " leaved from this channel");
-        }
-    });
+              localTracks.videoTrack.play("agora_local");
+              await client.setClientRole("host");
+              await client.publish(Object.values(localTracks));
+              currentChannel = "main";
 
+          }else{//他のチャンネルへ移動
+            await client.setClientRole("audience");
+            [ uid2, localTracks.videoTrack ] = await Promise.all([
+              client2.join(appId.value,message.text, null, uid2),
+              AgoraRTC.createCameraVideoTrack({cameraId:videoSource.value})
+            ]);
+            localTracks.videoTrack.play("agora_local");
+            await client2.publish(localTracks.videoTrack);
+            currentChannel = message.text;
+          }
+      });
 
-    //会場モニター用
-    client2 = AgoraRTC.createClient({mode: 'live', codec:'vp8'});
-    client2.init(appId.value, function () {
-        var channel = getChannelName()
-        client2.join("", channel, null, function(uid) {//サーバから入室するチャネル名を取得する
-            console.log("User " + uid + " join channel successfully");
+      //rtm channel
+      rtmChannel = rtm.createChannel(userChannel);
+      rtmChannel.join().then(()=>{
+          console.log("RTM Join Channel Success");
+          sendUserInfo(uid2);
 
-            camera = videoSource.value;
-	        localStream2 = AgoraRTC.createStream({streamID: uid, audio: false, cameraId: camera, video: true, screen: false});
-	        localStream2.init(function() {
-                console.log("getUserMedia successfully");
-                localStream2.play('agora_local');
-                client2.publish(localStream2, function (err) {
-                    console.log("Publish local stream error: " + err);
-                });
-                client2.on('stream-published', function (evt) {
-                    console.log("Publish local stream successfully");
-                });
-            }, function (err) {
-                console.log("getUserMedia failed", err);
-            });
+          rtmChannel.on('ChannelMessage', function (message, memberId) {
+              console.log("Get channel message:"+memberId);
+              console.dir(message);
+              if(message.text == "requestInfo"){
+                  sendUserInfo(uid2);
+              }
+          });
 
-            //rtm
-            rtm = AgoraRTM.createInstance(appId.value);
-            rtm.login({ token: '', uid: channel+uid }).then(() => {
-                console.log('AgoraRTM client login success');
-
-                rtm.on('MessageFromPeer', function (message, peerId) {
-                    //メインチャンネルに対する音声のpublish or unpublish
-                    console.dir(message.text);
-                    if(message.text == "publish"){
-                        client.publish(localStream, function (err) {
-                            console.log("Publish local stream error: " + err);
-                        });
-                    }else if(message.text == "unpublish"){
-                        client.unpublish(localStream, function (err) {
-                            console.log("Publish local stream error: " + err);
-                        });
-                    }
-                });
-
-                //rtm channel
-                rtmChannel = rtm.createChannel(channel);
-                rtmChannel.join().then(()=>{
-                    console.log("RTM Join Channel Success");
-                    sendUserInfo(uid);
-
-                    rtmChannel.on('ChannelMessage', function (message, memberId) {
-                        console.log("Get channel message:"+memberId);
-                        console.dir(message);
-                        if(message.text == "requestInfo"){
-                            sendUserInfo(uid);
-                        }
-                    });
-
-                });
-            }).catch(err => {
-                console.log('AgoraRTM client login failure', err);
-            });
-        }, function(err) {
-            console.log("Join channel failed", err);
-        });
-    }, function (err) {
-        console.log("AgoraRTC client init failed", err);
-    });
-
-    client2.on('error', function(err) {
-        console.log("Got error msg:", err.reason);
-    });
-
+      });
+  }).catch(err => {
+      console.log('AgoraRTM client login failure', err);
+  });
 }
 
 function leave() {
-    document.getElementById("leave").disabled = true;
-    client.leave(function () {
-        console.log("Leavel channel successfully");
-    }, function (err) {
-        console.log("Leave channel failed");
-    });
 }
 
 function getDevices() {
-    AgoraRTC.getDevices(function (devices) {
-        for (var i = 0; i !== devices.length; ++i) {
-            var device = devices[i];
-            var option = document.createElement('option');
-            option.value = device.deviceId;
-            if (device.kind === 'audioinput') {
-                option.text = device.label || 'microphone ' + (audioSelect.length + 1);
-                audioSelect.appendChild(option);
-            } else if (device.kind === 'videoinput') {
-                option.text = device.label || 'camera ' + (videoSelect.length + 1);
-                videoSelect.appendChild(option);
-            } else {
-                console.log('Some other kind of source/device: ', device);
-            }
-        }
-    });
+    AgoraRTC.getDevices().then(devices => {
+    for (var i = 0; i !== devices.length; ++i) {
+      var device = devices[i];
+      var option = document.createElement('option');
+      option.value = device.deviceId;
+      if (device.kind === 'audioinput') {
+        option.text = device.label || 'microphone ' + (audioSelect.length + 1);
+        audioSelect.appendChild(option);
+      } else if (device.kind === 'videoinput') {
+        option.text = device.label || 'camera ' + (videoSelect.length + 1);
+        videoSelect.appendChild(option);
+      } else {
+        console.log('Some other kind of source/device: ', device);
+      }
+    }
+  }).catch(e => {
+    console.log("get devices error!", e);
+  });
 }
 
+async function subscribe(user, mediaType) {
+  const uid = user.uid;
+  // subscribe to a remote user
+  await client.subscribe(user, mediaType);
+  console.log("subscribe success");
+  if (mediaType === 'video') {
+    const player = $(`
+      <div id="player-wrapper-${uid}">
+        <div id="player-${uid}" class="player"></div>
+      </div>
+    `);
+    $("#video").append(player);
+    user.videoTrack.play(`player-${uid}`);
+  }
+  if (mediaType === 'audio') {
+    user.audioTrack.play();
+  }
+}
+
+function handleUserPublished(user, mediaType) {
+  console.log("handleUserPublished");
+  const id = user.uid;
+  remoteUsers[id] = user;
+  subscribe(user, mediaType);
+}
+
+function handleUserUnpublished(user) {
+  const id = user.uid;
+  delete remoteUsers[id];
+  $(`#player-wrapper-${id}`).remove();
+}
 
 function getChannelName(){
     //本来はサーバー側で管理して、APIで取得する
